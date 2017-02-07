@@ -57,12 +57,62 @@ The code has four parts, the initial and then three stages “Kickoff performanc
 
 The initial part of the Bash code is where you set the test id and the API key.
 
+```bash
+#!/bin/bash
+# Run Load Impact test from bash
+
+# Load Impact test id
+testId="YOUR_TEST_ID"
+
+# API_KEY from your Load Impact account
+API_KEY="YOUR_API_KEY"
+
+uri="https://api.loadimpact.com/v2/test-configs/$testId/start"
+```
+
 So replace “YOUR\_TEST\_ID\_HERE” with your test id, keep the quotes, it’s Bash.
 
 And replace “YOUR\_API\_KEY\_HERE” with your API key. Keep inside the quotes.
 
 3b Kick off a performance test
 ==============================
+
+```bash
+uri="https://api.loadimpact.com/v2/test-configs/$testId/start"
+
+echo "Load Impact performance test"
+echo "Kickoff performance test"
+
+OUT=$(curl -qSfsw "\n%{http_code}" -u $API_KEY: -X POST https://api.loadimpact.com/v2/test-configs/$testId/start)
+
+status=`echo  "${OUT}" | tail -n1`
+
+# Status 201 expected, 200 is just a current running test id
+if [[ $status -ne 201 ]] ; then
+  echo " Could not start test $testId : $status \n $resp.Content "
+  exit 0
+else
+  tid=`echo "${OUT}" | head -n1 | jq '.id'`
+fi
+
+# Until 5 minutes timout or status is running 
+
+t=0
+status_text="\"NOT_YET\""
+until [ $status_text == "\"Running\"" ]; do
+  sleep 10s
+  OUT=$(curl -qSfsw '\n%{http_code}' -u $API_KEY: -X GET https://api.loadimpact.com/v2/tests/$tid/)
+  status_text=`echo  "${OUT}" | head -n1 | jq '.status_text'`
+  ((t=t+10))
+
+  if [[ $t -gt 300 ]] ; then
+    echo "Timeout - test start > 5 min"
+    exit 0
+  fi
+done
+
+echo "Performance test running"
+```
 
 We kick off the performance test by gluing together the URI for the [API to start the test](http://developers.loadimpact.com/api/#post-test-configs-id-start) and then output status messages to the console.
 
@@ -81,6 +131,33 @@ The last thing we do is to output a message to the console that the test is runn
 3c The test is running
 ======================
 
+```bash
+# wait until completed
+
+maxVULoadTime=0
+percentage=0
+until [[ $(echo "$percentage==100" | bc -l) == 1 ]]; do
+  sleep 30s
+
+  # Get percent completed
+  OUT=$(curl -qSfs -u $API_KEY: -X GET https://api.loadimpact.com/v2/tests/$tid/results?ids=__li_progress_percent_total)
+
+  percentage=`echo "${OUT}" | jq '.__li_progress_percent_total | max_by(.value)| .value'`
+
+  echo "Percentage completed $percentage"
+
+  # Get VU Load Time
+  OUT=$(curl -qSfs -u $API_KEY: -X GET https://api.loadimpact.com/v2/tests/$tid/results?ids=__li_user_load_time)
+
+  maxVULoadTime=`echo "${OUT}" | jq '.__li_user_load_time | max_by(.value) | .value'`
+
+  if [[ $(echo "$maxVULoadTime>1000" | bc -l) == 1 ]] ; then 
+    echo " VU Load Time exceeded limit of 1 sec: $maxVULoadTime "
+    exit 0
+  fi
+done
+```
+
 So now your Load Impact performance test is running!
 
 This time we wait until the test has completed, reached the percentage completed value of 100% with a slightly longer sleep between refreshing status calls.
@@ -98,10 +175,37 @@ If the value exceeds 1 second we exit the build step and fail the build by writi
 3d Show the results
 ===================
 
+```bash
+#show results
+echo "Show results"
+echo "Max VU Load Time: $maxVULoadTime"
+echo "Full results at https://app.loadimpact.com/test-runs/$tid"
+```
+
 Finally, we show the results and output the max VU Load Time. It can of course be any result but as a sample. And of course we tack on a direct link to the full results and analysis in Load Impact.
 
 Finally, executing the build.
 =============================
+
+```
+Load Impact performance test
+Kickoff performance test
+Performance test running
+Percentage completed 12
+Percentage completed 22
+Percentage completed 32.33333333333333
+Percentage completed 43.333333333333336
+Percentage completed 53.333333333333336
+Percentage completed 64.66666666666666
+Percentage completed 74.66666666666667
+Percentage completed 85.66666666666667
+Percentage completed 95.66666666666667
+Percentage completed 100
+Show results
+Max VU Load Time: 259.56
+Full results at https://app.loadimpact.com/test-runs/3799112
+$>
+```
 
 Once started it will look something like the above.
 
